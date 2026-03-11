@@ -1,0 +1,70 @@
+# ============================================================
+# final-dockerfile
+# Base: nvcr.io/nvidia/isaac-sim:4.5.0  (Ubuntu 22.04 内置)
+#
+# 与 xtrainer-isaac-dockerfile 的区别：
+#   lerobot 和 transformers 从本地目录安装，不走 GitHub
+#   requirements 文件本身不做任何修改
+#
+# 构建方式（在 d:\code 目录下执行，以 d:\code 为 build context）：
+#   docker build -f docker/final-dockerfile -t xtrainer-final:latest .
+#
+# 前置条件（宿主机）：
+#   1. docker login nvcr.io  (需要 NGC API Key)
+#      https://ngc.nvidia.com/setup/api-key
+#   2. 安装 nvidia-container-toolkit
+# ============================================================
+FROM nvcr.io/nvidia/isaac-sim:4.5.0
+
+# ── Environment ────────────────────────────────────────────
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# ── 补充系统依赖（基础镜像可能缺少的包）──────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    git-lfs \
+    curl \
+    wget \
+    build-essential \
+    cmake \
+    libssl-dev \
+    libffi-dev \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Python 依赖：全部安装到 Isaac Sim 自带的 Python 环境 (/isaac-sim/python.sh) ──
+COPY xtrainer-requirements.txt /tmp/xtrainer-requirements.txt
+
+RUN /isaac-sim/python.sh -m pip install --upgrade pip \
+    && grep -v 'lerobot' /tmp/xtrainer-requirements.txt \
+    | grep -v 'transformers @ git' \
+    > /tmp/xtrainer-requirements-filtered.txt \
+    && /isaac-sim/python.sh -m pip install -r /tmp/xtrainer-requirements-filtered.txt
+
+# ── 本地安装 lerobot 和 transformers ─────────────────────
+COPY code/lerobot      /opt/vendors/lerobot
+COPY code/transformers /opt/vendors/transformers
+
+RUN /isaac-sim/python.sh -m pip install -e /opt/vendors/lerobot \
+    && /isaac-sim/python.sh -m pip install    /opt/vendors/transformers
+
+# ── Install isaaclab & flatdict ───────────────────────────
+RUN /isaac-sim/python.sh -m pip install setuptools \
+    && /isaac-sim/python.sh -m pip install flatdict==4.0.1 --no-build-isolation \
+    && /isaac-sim/python.sh -m pip install isaaclab==2.1.0 --extra-index-url https://pypi.nvidia.com \
+    && /isaac-sim/python.sh -m pip install "numpy==2.2.6" "torch==2.7.1" "torchvision==0.22.1" --upgrade
+
+# ── Isaac Sim 环境变量（基础镜像一般已设置，此处保险起见）─
+ENV ISAAC_SIM_PATH=/isaac-sim
+
+# ── Working directory ──────────────────────────────────────
+WORKDIR /workspace
+
+CMD ["/bin/bash"]
